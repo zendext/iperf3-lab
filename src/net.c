@@ -93,10 +93,37 @@ extern int gerror;
 int
 iperf_wire_init(struct iperf_test *test)
 {
-    const char *path = getenv("IPERF3_WIRE_KEY_FILE");
+    const char *path = test->wire_key_file;
+    const char *config_home;
+    const char *home;
+    char default_path[PATH_MAX];
+    int length;
 
-    if (path == NULL)
+    if (test->wire_plain) {
+        if (path != NULL) {
+            errno = EINVAL;
+            return -1;
+        }
         return 0;
+    }
+    if (path == NULL) {
+        config_home = getenv("XDG_CONFIG_HOME");
+        if (config_home != NULL && config_home[0] != '\0') {
+            length = snprintf(default_path, sizeof(default_path), "%s/iperf3-lab/wire.key", config_home);
+        } else {
+            home = getenv("HOME");
+            if (home == NULL || home[0] == '\0') {
+                errno = ENOENT;
+                return -1;
+            }
+            length = snprintf(default_path, sizeof(default_path), "%s/.config/iperf3-lab/wire.key", home);
+        }
+        if (length < 0 || length >= (int) sizeof(default_path)) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        path = default_path;
+    }
 #if defined(HAVE_SSL)
     FILE *file = fopen(path, "rb");
     char encoded[67];
@@ -1056,4 +1083,3 @@ iperf_sync_close_socket(int sock)
 #endif // HAVE_SOCKET_SHUTDOWN_SHUT_WR
     close(sock);
 }
-

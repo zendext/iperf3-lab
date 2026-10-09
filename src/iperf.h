@@ -339,6 +339,8 @@ struct iperf_test
     int       ctrl_sck;
     int       wire_enabled;
     unsigned char wire_key[32];
+    char     *wire_key_file;
+    int       wire_plain;
     int       mapped_v4;
     int       listener;
     int       prot_listener;

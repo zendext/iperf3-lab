@@ -109,6 +109,16 @@ below, as well as summarized in iperf3's help output, which can be
 viewed by running iperf3 with the -h flag.
 .SH "GENERAL OPTIONS"
 .TP
+.BR --wire-key-file " " \fIfile\fR
+Read this fork's 64-hex-character wire key from the specified file.
+By default, read $XDG_CONFIG_HOME/iperf3-lab/wire.key, or
+$HOME/.config/iperf3-lab/wire.key when XDG_CONFIG_HOME is unset.
+A missing or malformed key fails startup without reverting to plain mode.
+.TP
+.BR --wire-plain
+Use the original unencrypted iperf3 protocol for comparison or interoperability.
+Cannot be combined with --wire-key-file.
+.TP
 .BR -p ", " --port " \fIn\fR"
 Set server port to listen on/connect to to \fIn\fR (default 5201)
 .TP

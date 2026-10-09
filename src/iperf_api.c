@@ -1192,6 +1192,8 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
         {"mptcp", no_argument, NULL, 'm'},
 #endif
         {"gsro", no_argument, NULL, OPT_GSRO},
+        {"wire-key-file", required_argument, NULL, OPT_WIRE_KEY_FILE},
+        {"wire-plain", no_argument, NULL, OPT_WIRE_PLAIN},
         {"debug", optional_argument, NULL, 'd'},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0}
@@ -1223,6 +1225,17 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
 
     while ((flag = getopt_long(argc, argv, "p:f:i:D1VJvsc:ub:t:n:k:l:P:Rw:B:M:N46S:L:ZO:F:A:T:C:dI:mhX:", longopts, NULL)) != -1) {
         switch (flag) {
+            case OPT_WIRE_KEY_FILE:
+                free(test->wire_key_file);
+                test->wire_key_file = strdup(optarg);
+                if (test->wire_key_file == NULL) {
+                    i_errno = IENEWTEST;
+                    return -1;
+                }
+                break;
+            case OPT_WIRE_PLAIN:
+                test->wire_plain = 1;
+                break;
             case 'p':
 		portno = atoi(optarg);
 		if (portno < 1 || portno > 65535) {
@@ -3699,6 +3712,7 @@ iperf_free_test(struct iperf_test *test)
     // test->streams = NULL;
     test->stats_callback = NULL;
     test->reporter_callback = NULL;
+    free(test->wire_key_file);
 #if defined(HAVE_SSL)
     OPENSSL_cleanse(test->wire_key, sizeof(test->wire_key));
 #endif

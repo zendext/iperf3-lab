@@ -119,12 +119,12 @@ class Proxy:
 
 
 def run_test(binary, env, options=(), proxy=False, tamper=False, fragment=False,
-             server_env=None, server_binary=None):
+             server_env=None, server_binary=None, server_options=()):
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port = reserve.getsockname()[1]
     server = subprocess.Popen(
-        [server_binary or binary, "-s", "-1", "-B", "127.0.0.1", "-p", str(port), "--forceflush"],
+        [server_binary or binary, "-s", "-1", "-B", "127.0.0.1", "-p", str(port), "--forceflush", *server_options],
         env=server_env if server_env is not None else env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
@@ -161,11 +161,12 @@ def run_test(binary, env, options=(), proxy=False, tamper=False, fragment=False,
         assert output["end"]["streams"], "no measured data streams"
         assert any(item["sender"]["bytes"] > 0 if "sender" in item
                    else item["udp"]["bytes"] > 0 for item in output["end"]["streams"])
+        assert output["end"].get("sum_received", output["end"].get("sum", {})).get("bytes", 0) > 0
         captured = relay.captured if relay else []
         if relay:
             for worker in relay.workers:
                 worker.join(timeout=2)
-            if "-u" in options and "IPERF3_WIRE_KEY_FILE" in env:
+            if "-u" in options and "--wire-plain" not in options:
                 assert relay.udp_captured, "no captured UDP handshakes"
                 for directions in relay.udp_captured.values():
                     assert len(directions[0][0]) == 32, "UDP connect is not wrapped"
@@ -193,10 +194,12 @@ def main():
     plain = os.environ.copy()
     plain.pop("IPERF3_WIRE_KEY_FILE", None)
     with tempfile.TemporaryDirectory() as temp:
-        key = Path(temp) / "key"
+        config = Path(temp) / "config"
+        key = config / "iperf3-lab" / "wire.key"
+        key.parent.mkdir(parents=True)
         key.write_text(secrets.token_hex(32) + "\n")
         key.chmod(0o600)
-        wire = dict(plain, IPERF3_WIRE_KEY_FILE=str(key))
+        wire = dict(plain, XDG_CONFIG_HOME=str(config))
         first_cookies = []
         for options, fragment in [((), False), (("-R", "-P", "3"), True), (("--bidir",), False)]:
             output, captures = run_test(binary, wire, options, proxy=True, fragment=fragment)
@@ -220,28 +223,35 @@ def main():
             run_test(binary, wire, options, proxy=True)
             print(f"PASS encrypted UDP {options}", flush=True)
         for options in [(), ("-R",), ("-u", "-b", "1M")]:
-            _, captures = run_test(binary, plain, options, proxy="-u" not in options)
+            _, captures = run_test(binary, plain, (*options, "--wire-plain"),
+                                   proxy="-u" not in options, server_options=("--wire-plain",))
             if captures:
                 assert b'"client_version"' in captures[0][0], "plain mode is no longer compatible"
             print(f"PASS original mode {options}", flush=True)
         if args.stock_binary:
             stock = str(Path(args.stock_binary).resolve())
-            run_test(binary, plain, server_binary=stock)
-            run_test(stock, plain, server_binary=binary)
+            run_test(binary, plain, ("--wire-plain",), server_binary=stock)
+            run_test(stock, plain, server_binary=binary, server_options=("--wire-plain",))
             print("PASS official iperf3 interoperability in both roles", flush=True)
         run_test(binary, wire, proxy=True, tamper=True)
         print("PASS tampered ciphertext rejected", flush=True)
-        other = Path(temp) / "other-key"
+        other_config = Path(temp) / "other-config"
+        other = other_config / "iperf3-lab" / "wire.key"
+        other.parent.mkdir(parents=True)
         other.write_text(secrets.token_hex(32) + "\n")
         other.chmod(0o600)
-        run_test(binary, wire, server_env=dict(plain, IPERF3_WIRE_KEY_FILE=str(other)))
+        run_test(binary, wire, server_env=dict(plain, XDG_CONFIG_HOME=str(other_config)))
         print("PASS wrong key rejected", flush=True)
+        missing = dict(plain, XDG_CONFIG_HOME=str(Path(temp) / "missing-config"))
+        run_test(binary, missing, ("--wire-key-file", str(key)),
+                 server_options=("--wire-key-file", str(key)))
+        print("PASS explicit key file without environment variable", flush=True)
         for contents in ["bad\n", "0" * 63 + "g\n", "00" * 32 + "junk"]:
             key.write_text(contents)
             result = subprocess.run([binary, "-s", "-1"], env=wire, capture_output=True, timeout=2)
             assert result.returncode != 0, "invalid key was accepted"
         print("PASS malformed keys rejected", flush=True)
-        result = subprocess.run([binary, "-s", "-1"], env=dict(wire, IPERF3_WIRE_KEY_FILE=str(key) + "-missing"),
+        result = subprocess.run([binary, "-s", "-1"], env=missing,
                                 capture_output=True, timeout=2)
         assert result.returncode != 0
         print("PASS missing key rejected", flush=True)

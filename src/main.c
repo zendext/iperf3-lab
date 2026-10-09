@@ -114,17 +114,17 @@ main(int argc, char **argv)
         iperf_errexit(NULL, "create new test error - %s", iperf_strerror(i_errno));
     iperf_defaults(test);	/* sets defaults */
 
-    if (iperf_wire_init(test) < 0) {
-        fprintf(stderr, "iperf3: cannot load IPERF3_WIRE_KEY_FILE: %s\n", strerror(errno));
-        iperf_free_test(test);
-        return 1;
-    }
-
     if (iperf_parse_arguments(test, argc, argv) < 0) {
         iperf_err(test, "parameter error - %s", iperf_strerror(i_errno));
         fprintf(stderr, "\n");
         usage();
         exit(1);
+    }
+
+    if (iperf_wire_init(test) < 0) {
+        fprintf(stderr, "iperf3: cannot load wire key configuration: %s\n", strerror(errno));
+        iperf_free_test(test);
+        return 1;
     }
 
     if (run(test) < 0)

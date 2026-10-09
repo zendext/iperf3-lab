@@ -121,6 +121,8 @@ const char usage_longstr[] = "Usage: iperf3 [-s|-c host] [options]\n"
                            "  --json-stream-full-output output in JSON format with JSON streams enabled\n"
                            "  --logfile f               send output to a log file\n"
                            "  --forceflush              force flushing output at every interval\n"
+                           "  --wire-key-file <file>    use a custom wire key file (default: user config/iperf3-lab/wire.key)\n"
+                           "  --wire-plain              use the original unencrypted iperf3 protocol\n"
                            "  --timestamps<=format>     emit a timestamp at the start of each output line\n"
                            "                            (optional \"=\" and format string as per strftime(3))\n"
 
