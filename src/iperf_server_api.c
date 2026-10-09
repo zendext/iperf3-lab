@@ -190,7 +190,7 @@ iperf_accept(struct iperf_test *test)
             return -1;
 #endif //HAVE_TCP_KEEPALIVE
 
-        if (Nread(test->ctrl_sck, test->cookie, COOKIE_SIZE, Ptcp) != COOKIE_SIZE) {
+        if (iperf_wire_read(test, test->ctrl_sck, test->cookie, COOKIE_SIZE, Ptcp) != COOKIE_SIZE) {
             /*
              * Note this error covers both the case of a system error
              * or the inability to read the correct amount of data
@@ -219,7 +219,7 @@ iperf_accept(struct iperf_test *test)
          * Also, if sending failed, don't return an error, as the request is not related
          * to the ongoing test, and returning an error will terminate the test.
          */
-        if (Nwrite(s, (char*) &rbuf, sizeof(rbuf), Ptcp) < 0) {
+        if (iperf_wire_write(test, s, (char*) &rbuf, sizeof(rbuf), Ptcp) < 0) {
             if (test->debug)
                 printf("failed to send ACCESS_DENIED to an unsolicited connection request during active test\n");
         } else {
@@ -246,7 +246,7 @@ iperf_handle_message_server(struct iperf_test *test)
     }
 
     // XXX: Need to rethink how this behaves to fit API
-    if ((rval = Nread(test->ctrl_sck, (char*) &test->state, sizeof(signed char), Ptcp)) <= 0) {
+    if ((rval = iperf_wire_read(test, test->ctrl_sck, (char*) &test->state, sizeof(signed char), Ptcp)) <= 0) {
         if (rval == 0) {
             iperf_err(test, "the client has unexpectedly closed the connection");
             i_errno = IECTRLCLOSE;
@@ -329,9 +329,9 @@ server_timer_proc(TimerClientData client_data, struct iperf_time *nowP)
     if (iperf_set_send_state(test, SERVER_ERROR) == 0) {
         i_errno = IESERVERTESTDURATIONEXPIRED;
         err = htonl(i_errno);
-        if (Nwrite(test->ctrl_sck, (char*) &err, sizeof(err), Ptcp) == sizeof(err)) {
+        if (iperf_wire_write(test, test->ctrl_sck, (char*) &err, sizeof(err), Ptcp) == sizeof(err)) {
             err = 0;
-            Nwrite(test->ctrl_sck, (char*) &err, sizeof(err), Ptcp);
+            iperf_wire_write(test, test->ctrl_sck, (char*) &err, sizeof(err), Ptcp);
         };
     }
     /* Cancel and join per-stream worker threads BEFORE freeing any stream,
@@ -476,9 +476,9 @@ cleanup_server(struct iperf_test *test)
     if (i_errno != IENONE && test->ctrl_sck != -1) {
         if (iperf_set_send_state(test, SERVER_ERROR) == 0) {
             err = htonl(i_errno);
-            if (Nwrite(test->ctrl_sck, (char*) &err, sizeof(err), Ptcp) >= 0) {
+            if (iperf_wire_write(test, test->ctrl_sck, (char*) &err, sizeof(err), Ptcp) >= 0) {
                 err = htonl(errno);
-                Nwrite(test->ctrl_sck, (char*) &err, sizeof(err), Ptcp);
+                iperf_wire_write(test, test->ctrl_sck, (char*) &err, sizeof(err), Ptcp);
             }
         }
     }
@@ -639,14 +639,14 @@ iperf_run_server(struct iperf_test *test)
         }
 
         err = htonl(i_errno);
-        if (Nwrite(test->ctrl_sck, (char*) &err, sizeof(err), Ptcp) < 0) {
+        if (iperf_wire_write(test, test->ctrl_sck, (char*) &err, sizeof(err), Ptcp) < 0) {
             cleanup_server(test);
             i_errno = IECTRLWRITE;
             return -1;
         }
 
         err = htonl(errno);
-        if (Nwrite(test->ctrl_sck, (char*) &err, sizeof(err), Ptcp) < 0) {
+        if (iperf_wire_write(test, test->ctrl_sck, (char*) &err, sizeof(err), Ptcp) < 0) {
             cleanup_server(test);
             i_errno = IECTRLWRITE;
             return -1;

@@ -101,9 +101,9 @@ static int send_results(struct iperf_test *test);
 static int get_results(struct iperf_test *test);
 static int diskfile_send(struct iperf_stream *sp);
 static int diskfile_recv(struct iperf_stream *sp);
-static int JSON_write(int fd, cJSON *json);
+static int JSON_write(struct iperf_test *test, cJSON *json);
 static void print_interval_results(struct iperf_test *test, struct iperf_stream *sp, cJSON *json_interval_streams);
-static cJSON *JSON_read(int fd, int max_size);
+static cJSON *JSON_read(struct iperf_test *test, int max_size);
 static int JSONStream_Output(struct iperf_test *test, const char* event_name, cJSON* obj);
 
 
@@ -2065,7 +2065,7 @@ iperf_set_send_state(struct iperf_test *test, signed char state)
 {
     if (test->ctrl_sck >= 0) {
         iperf_set_test_state(test, state);
-        if (Nwrite(test->ctrl_sck, (char*) &state, sizeof(state), Ptcp) < 0) {
+        if (iperf_wire_write(test, test->ctrl_sck, (char*) &state, sizeof(state), Ptcp) < 0) {
 	    i_errno = IESENDMESSAGE;
 	    return -1;
         }
@@ -2528,7 +2528,7 @@ send_parameters(struct iperf_test *test)
 	    cJSON_free(str);
 	}
 
-	if (JSON_write(test->ctrl_sck, j) < 0) {
+	if (JSON_write(test, j) < 0) {
 	    i_errno = IESENDPARAMS;
 	    r = -1;
 	}
@@ -2547,7 +2547,7 @@ get_parameters(struct iperf_test *test)
     cJSON *j;
     cJSON *j_p;
 
-    j = JSON_read(test->ctrl_sck, MAX_PARAMS_JSON_STRING);
+    j = JSON_read(test, MAX_PARAMS_JSON_STRING);
     if (j == NULL) {
 	i_errno = IERECVPARAMS;
         r = -1;
@@ -2961,7 +2961,7 @@ send_results(struct iperf_test *test)
 		printf("send_results\n%s\n", str);
                 cJSON_free(str);
 	    }
-	    if (r == 0 && JSON_write(test->ctrl_sck, j) < 0) {
+	    if (r == 0 && JSON_write(test, j) < 0) {
 		i_errno = IESENDRESULTS;
 		r = -1;
 	    }
@@ -3006,7 +3006,7 @@ get_results(struct iperf_test *test)
     int retransmits;
     struct iperf_stream *sp;
 
-    j = JSON_read(test->ctrl_sck, 0);
+    j = JSON_read(test, 0);
     if (j == NULL) {
 	i_errno = IERECVRESULTS;
         r = -1;
@@ -3168,7 +3168,7 @@ get_results(struct iperf_test *test)
 /*************************************************************/
 
 static int
-JSON_write(int fd, cJSON *json)
+JSON_write(struct iperf_test *test, cJSON *json)
 {
     uint32_t hsize, nsize;
     char *str;
@@ -3180,10 +3180,10 @@ JSON_write(int fd, cJSON *json)
     else {
 	hsize = strlen(str);
 	nsize = htonl(hsize);
-	if (Nwrite(fd, (char*) &nsize, sizeof(nsize), Ptcp) < 0)
+	if (iperf_wire_write(test, test->ctrl_sck, (char*) &nsize, sizeof(nsize), Ptcp) < 0)
 	    r = -1;
 	else {
-	    if (Nwrite(fd, str, hsize, Ptcp) < 0)
+	    if (iperf_wire_write(test, test->ctrl_sck, str, hsize, Ptcp) < 0)
 		r = -1;
 	}
 	cJSON_free(str);
@@ -3194,7 +3194,7 @@ JSON_write(int fd, cJSON *json)
 /*************************************************************/
 
 static cJSON *
-JSON_read(int fd, int max_size)
+JSON_read(struct iperf_test *test, int max_size)
 {
     uint32_t hsize, nsize;
     size_t strsize;
@@ -3208,16 +3208,17 @@ JSON_read(int fd, int max_size)
      * Then read the JSON into a buffer and parse it.  Return a parsed JSON
      * structure, NULL if there was an error.
      */
-    rc = Nread(fd, (char*) &nsize, sizeof(nsize), Ptcp);
+    rc = iperf_wire_read(test, test->ctrl_sck, (char*) &nsize, sizeof(nsize), Ptcp);
     if (rc == sizeof(nsize)) {
         hsize = ntohl(nsize);
-        if (hsize > 0 && (max_size == 0 || hsize <= max_size)) {
+        if (hsize > 0 && (max_size == 0 || hsize <= max_size) &&
+            (!test->wire_enabled || hsize <= IPERF_WIRE_MAX_SIZE)) {
 	    /* Allocate a buffer to hold the JSON */
 	    strsize = hsize + 1;              /* +1 for trailing NULL */
 	    if (strsize) {
 	        str = (char *) calloc(sizeof(char), strsize);
 	        if (str != NULL) {
-	            rc = Nread(fd, str, hsize, Ptcp);
+	            rc = iperf_wire_read(test, test->ctrl_sck, str, hsize, Ptcp);
 	            if (rc >= 0) {
                         /*
                         * We should be reading in the number of bytes corresponding to the
@@ -3698,6 +3699,9 @@ iperf_free_test(struct iperf_test *test)
     // test->streams = NULL;
     test->stats_callback = NULL;
     test->reporter_callback = NULL;
+#if defined(HAVE_SSL)
+    OPENSSL_cleanse(test->wire_key, sizeof(test->wire_key));
+#endif
     free(test);
 }
 
@@ -5342,7 +5346,7 @@ iperf_got_sigend(struct iperf_test *test, int sig)
 
     if (test->ctrl_sck >= 0) {
 	iperf_set_test_state(test, (test->role == 'c') ? CLIENT_TERMINATE : SERVER_TERMINATE);
-	(void) Nwrite(test->ctrl_sck, (char*) &test->state, sizeof(signed char), Ptcp);
+	(void) iperf_wire_write(test, test->ctrl_sck, (char*) &test->state, sizeof(signed char), Ptcp);
     }
     i_errno = (test->role == 'c') ? IECLIENTTERM : IESERVERTERM;
 

@@ -38,6 +38,12 @@
 #include <string.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdlib.h>
+#include <ctype.h>
+#if defined(HAVE_SSL)
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#endif
 #if defined(HAVE_UDP_SEGMENT) || defined(HAVE_UDP_GRO)
 #include <linux/udp.h>
 #endif
@@ -68,6 +74,7 @@
 #endif /* HAVE_POLL_H */
 
 #include "iperf.h"
+#include "iperf_api.h"
 #include "iperf_util.h"
 #include "net.h"
 #include "timer.h"
@@ -81,6 +88,170 @@ static int nread_overall_timeout = 30;
  * presence of this declaration is a sign we need to revisit this layering.
  */
 extern int gerror;
+
+/* Optional experimental wire format. Bulk measurement data stays unchanged. */
+int
+iperf_wire_init(struct iperf_test *test)
+{
+    const char *path = getenv("IPERF3_WIRE_KEY_FILE");
+
+    if (path == NULL)
+        return 0;
+#if defined(HAVE_SSL)
+    FILE *file = fopen(path, "rb");
+    char encoded[67];
+    size_t size;
+    unsigned int value;
+    int failed;
+
+    if (file == NULL)
+        return -1;
+    size = fread(encoded, 1, sizeof(encoded), file);
+    failed = ferror(file);
+    fclose(file);
+    if (failed) {
+        errno = EIO;
+        return -1;
+    }
+    if (!((size == 64) || (size == 65 && encoded[64] == '\n') ||
+          (size == 66 && encoded[64] == '\r' && encoded[65] == '\n'))) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (size_t i = 0; i < 64; i++) {
+        if (!isxdigit((unsigned char) encoded[i])) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    encoded[64] = '\0';
+    for (size_t i = 0; i < sizeof(test->wire_key); i++) {
+        if (sscanf(encoded + 2 * i, "%2x", &value) != 1) {
+            errno = EINVAL;
+            return -1;
+        }
+        test->wire_key[i] = value;
+    }
+    test->wire_enabled = 1;
+    OPENSSL_cleanse(encoded, sizeof(encoded));
+    return 0;
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+int
+iperf_wire_write(struct iperf_test *test, int fd, const char *buf, size_t count, int prot)
+{
+    if (!test->wire_enabled)
+        return Nwrite(fd, buf, count, prot);
+#if defined(HAVE_SSL)
+    /* Each record is a random 12-byte nonce, ciphertext, and 16-byte GCM tag. */
+    unsigned char *record;
+    EVP_CIPHER_CTX *ctx;
+    int size, final_size, result = -1;
+
+    if (count == 0 || count > IPERF_WIRE_MAX_SIZE) {
+        errno = EMSGSIZE;
+        return -1;
+    }
+    record = malloc(count + 28);
+    ctx = EVP_CIPHER_CTX_new();
+    if (record == NULL || ctx == NULL) {
+        free(record);
+        EVP_CIPHER_CTX_free(ctx);
+        errno = ENOMEM;
+        return -1;
+    }
+    errno = EIO;
+    if (RAND_bytes(record, 12) == 1 &&
+        EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, test->wire_key, record) == 1 &&
+        EVP_EncryptUpdate(ctx, record + 12, &size, (const unsigned char *) buf, count) == 1 &&
+        EVP_EncryptFinal_ex(ctx, record + 12 + size, &final_size) == 1 &&
+        size + final_size == (int) count &&
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, record + 12 + count) == 1) {
+        if (Nwrite(fd, (const char *) record, count + 28, prot) == (int) count + 28)
+            result = count;
+    }
+    EVP_CIPHER_CTX_free(ctx);
+    free(record);
+    return result;
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+static int
+wire_receive(struct iperf_test *test, int fd, char *buf, size_t count, int prot,
+             struct sockaddr *peer, socklen_t *peer_len)
+{
+    if (!test->wire_enabled) {
+        if (prot == Pudp)
+            return recvfrom(fd, buf, count, 0, peer, peer_len);
+        return Nread(fd, buf, count, prot);
+    }
+#if defined(HAVE_SSL)
+    unsigned char *record, *plaintext;
+    EVP_CIPHER_CTX *ctx;
+    int received, size, final_size, result = -1;
+
+    if (count == 0 || count > IPERF_WIRE_MAX_SIZE) {
+        errno = EMSGSIZE;
+        return -1;
+    }
+    record = malloc(count + 28);
+    plaintext = malloc(count);
+    ctx = EVP_CIPHER_CTX_new();
+    if (record == NULL || plaintext == NULL || ctx == NULL) {
+        free(record);
+        free(plaintext);
+        EVP_CIPHER_CTX_free(ctx);
+        errno = ENOMEM;
+        return -1;
+    }
+    if (prot == Pudp)
+        received = recvfrom(fd, record, count + 28, MSG_TRUNC, peer, peer_len);
+    else
+        received = Nread(fd, (char *) record, count + 28, prot);
+    if (received == 0 && prot != Pudp) {
+        result = 0;
+    } else if (received >= 0) {
+        errno = EBADMSG;
+        if (received == (int) count + 28 &&
+            EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, test->wire_key, record) == 1 &&
+            EVP_DecryptUpdate(ctx, plaintext, &size, record + 12, count) == 1 &&
+            EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, record + 12 + count) == 1 &&
+            EVP_DecryptFinal_ex(ctx, plaintext + size, &final_size) == 1 &&
+            size + final_size == (int) count) {
+            memcpy(buf, plaintext, count);
+            result = count;
+        }
+    }
+    OPENSSL_cleanse(plaintext, count);
+    EVP_CIPHER_CTX_free(ctx);
+    free(plaintext);
+    free(record);
+    return result;
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
+int
+iperf_wire_read(struct iperf_test *test, int fd, char *buf, size_t count, int prot)
+{
+    return wire_receive(test, fd, buf, count, prot, NULL, NULL);
+}
+
+int
+iperf_wire_recvfrom(struct iperf_test *test, int fd, char *buf, size_t count,
+                   struct sockaddr *peer, socklen_t *peer_len)
+{
+    return wire_receive(test, fd, buf, count, Pudp, peer, peer_len);
+}
 
 /*
  * timeout_connect adapted from netcat, via OpenBSD and FreeBSD

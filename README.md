@@ -1,5 +1,9 @@
 ![iperf3 logo](images/iperf3-logos-0413_6.png "iperf3 logo")
 
+This fork's `wire-obfuscation` branch is based on iperf3 3.22 and adds an
+optional encrypted control/handshake format for traffic classification
+experiments. See [WIRE.md](WIRE.md) for setup, scope, and verification.
+
 iperf3:  A TCP, UDP, and SCTP network bandwidth measurement tool
 ================================================================
 

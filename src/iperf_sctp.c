@@ -125,14 +125,14 @@ iperf_sctp_accept(struct iperf_test * test)
         return -1;
     }
 
-    if (Nread(s, cookie, COOKIE_SIZE, Psctp) < 0) {
+    if (iperf_wire_read(test, s, cookie, COOKIE_SIZE, Psctp) != COOKIE_SIZE) {
         i_errno = IERECVCOOKIE;
         close(s);
         return -1;
     }
 
     if (strncmp(test->cookie, cookie, COOKIE_SIZE) != 0) {
-        if (Nwrite(s, (char*) &rbuf, sizeof(rbuf), Psctp) < 0) {
+        if (iperf_wire_write(test, s, (char*) &rbuf, sizeof(rbuf), Psctp) < 0) {
             i_errno = IESENDMESSAGE;
             close(s);
             return -1;
@@ -514,7 +514,7 @@ iperf_sctp_connect(struct iperf_test *test)
     }
 
     /* Send cookie for verification */
-    if (Nwrite(s, test->cookie, COOKIE_SIZE, Psctp) < 0) {
+    if (iperf_wire_write(test, s, test->cookie, COOKIE_SIZE, Psctp) < 0) {
 	saved_errno = errno;
 	close(s);
 	freeaddrinfo(server_res);

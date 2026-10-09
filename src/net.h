@@ -27,6 +27,13 @@
 #ifndef __NET_H
 #define __NET_H
 
+struct iperf_test;
+#define IPERF_WIRE_MAX_SIZE (16 * 1024 * 1024)
+int iperf_wire_init(struct iperf_test *test);
+int iperf_wire_read(struct iperf_test *test, int fd, char *buf, size_t count, int prot);
+int iperf_wire_write(struct iperf_test *test, int fd, const char *buf, size_t count, int prot);
+int iperf_wire_recvfrom(struct iperf_test *test, int fd, char *buf, size_t count, struct sockaddr *peer, socklen_t *peer_len);
+
 int timeout_connect(int s, const struct sockaddr *name, socklen_t namelen, int timeout);
 int create_socket(int domain, int type, int proto, const char *local, const char *bind_dev, int local_port, const char *server, int port, struct addrinfo **server_res_out);
 int netdial(int domain, int proto, const char *local, const char *bind_dev, int local_port, const char *server, int port, int timeout);
